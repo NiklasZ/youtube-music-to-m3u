@@ -84,7 +84,16 @@ def index_local_music(music_dir: str) -> List[Dict[str, str]]:
                     # Fallback to filename without extension if no ID3 title exists
                     title = filepath.stem
 
-                local_files.append({"path": str(filepath.absolute()), "title": title})
+                album = audio["album"][0] if audio and "album" in audio else None
+
+                tracknumber = None
+                if audio and "tracknumber" in audio:
+                    try:
+                        tracknumber = int(audio["tracknumber"][0].split("/")[0])
+                    except (ValueError, IndexError):
+                        pass
+
+                local_files.append({"path": str(filepath.absolute()), "title": title, "album": album, "tracknumber": tracknumber})
             except Exception as e:
                 print(f"Could not read metadata for {filepath.name}: {e}")
 
@@ -97,6 +106,7 @@ def generate_m3u(
     local_files: List[Dict[str, str]],
     output_path: str,
     threshold: float,
+    sort_playlist: bool = False,
 ):
     """Phases 4 & 5: Fuzzy match titles and write the M3U file."""
     print("Matching tracks and generating M3U...")
@@ -119,6 +129,17 @@ def generate_m3u(
             matched.append((yt_title, local_files[match[2]]))
         else:
             unmatched.append(item)
+
+    if sort_playlist:
+        def sort_key(item):
+            _, local_file = item
+            album = local_file.get("album")
+            tracknumber = local_file.get("tracknumber")
+            album_sort = (0, album.lower()) if album else (1, "")
+            track_sort = (0, tracknumber) if tracknumber is not None else (1, 0)
+            return album_sort + track_sort
+
+        matched.sort(key=sort_key)
 
     print("\n--- Summary ---")
     if not matched:
@@ -149,7 +170,7 @@ def csv_stem_to_m3u_name(csv_path: Path) -> str:
     return stem + ".m3u"
 
 
-def process_csv(youtube_client, csv_path: Path, output_path: Path, music_dir: str, threshold: float):
+def process_csv(youtube_client, csv_path: Path, output_path: Path, music_dir: str, threshold: float, sort_playlist: bool = False):
     """Process a single CSV playlist and write its M3U counterpart."""
     print(f"\nProcessing: {csv_path} -> {output_path}")
 
@@ -162,7 +183,7 @@ def process_csv(youtube_client, csv_path: Path, output_path: Path, music_dir: st
     elif not resolved_playlist:
         print("No titles resolved from YouTube API.")
     else:
-        generate_m3u(resolved_playlist, local_music_index, str(output_path), threshold)
+        generate_m3u(resolved_playlist, local_music_index, str(output_path), threshold, sort_playlist)
 
 
 if __name__ == "__main__":
@@ -208,6 +229,11 @@ if __name__ == "__main__":
         metavar="FOLDER",
         help="Folder to write M3U files into for batch mode (defaults to the input folder)",
     )
+    parser.add_argument(
+        "--sort",
+        action="store_true",
+        help="Sort playlist by album name then track number (missing fields sort last)",
+    )
 
     args = parser.parse_args()
 
@@ -218,7 +244,7 @@ if __name__ == "__main__":
         if not csv_path.is_file():
             parser.error(f"Input file not found: {csv_path}")
         out_path = Path(args.output) if args.output else csv_path.parent / csv_stem_to_m3u_name(csv_path)
-        process_csv(youtube_client, csv_path, out_path, args.music_dir, args.threshold)
+        process_csv(youtube_client, csv_path, out_path, args.music_dir, args.threshold, args.sort)
     else:
         in_folder = Path(args.input_folder)
         if not in_folder.is_dir():
@@ -232,4 +258,4 @@ if __name__ == "__main__":
 
         for csv_path in csv_files:
             out_path = out_folder / csv_stem_to_m3u_name(csv_path)
-            process_csv(youtube_client, csv_path, out_path, args.music_dir, args.threshold)
+            process_csv(youtube_client, csv_path, out_path, args.music_dir, args.threshold, args.sort)
